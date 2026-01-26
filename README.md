@@ -6,6 +6,7 @@ A command-line tool for processing novel text files.
 
 - **Chapter**: Extract specific chapters or efficient ranges from large novel files.
 - **Volume**: Automatically insert volume markers every N chapters.
+- **Clean**: Remove duplicate chapters (e.g., from copy-paste errors).
 - **TTS**: Synthesize audio for chapters using GPT-SoVITS.
 
 ## Build & Run
@@ -53,6 +54,14 @@ Synthesize audio using a local GPT-SoVITS server.
 # Process 5 chapters starting from '第10章'
 ./dist/novel-cli.pyz tts -f novel.txt -s "第10章" -c 5
 ```
+
+### Clean / Deduplicate Chapters
+Remove consecutively duplicated chapters (e.g. `Chapter 1` followed by an indented `  Chapter 1`).
+
+```bash
+./dist/novel-cli.pyz clean -f novel.txt
+```
+This will create `novel_clean.txt`.
 
 ## Configuration
 

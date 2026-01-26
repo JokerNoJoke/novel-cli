@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from .config import DEFAULT_REF_AUDIO, DEFAULT_TTS_API
-from .core import chapter, tts, volume
+from .core import chapter, tts, volume, clean
 from .utils.text import DEFAULT_CHAPTER_PATTERN
 
 def main():
@@ -45,6 +45,11 @@ def main():
         default=DEFAULT_REF_AUDIO, 
         help="Reference audio path on TTS server."
     )
+
+    # Subcommand: clean (dedupe)
+    parser_clean = subparsers.add_parser('clean', help='Remove duplicate chapters.')
+    add_common_args(parser_clean)
+
 
     args = parser.parse_args()
 
@@ -92,6 +97,14 @@ def main():
                 regex_pattern=args.regex_pattern
             )
             print(f"TTS processing complete. Output in: {result_dir}")
+            
+        elif args.command == 'clean':
+            print(f"Cleaning duplicates in: {input_file}")
+            result = clean.deduplicate_chapters(
+                input_path=input_file,
+                regex_pattern=args.regex_pattern
+            )
+            print(f"Success! Saved to: {result}")
 
     except Exception as e:
         print(f"Error: {e}")
