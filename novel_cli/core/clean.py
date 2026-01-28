@@ -2,11 +2,8 @@
 Core logic for cleaning duplicate chapters in novel files.
 """
 import json
-import os
 from pathlib import Path
-from typing import List, Dict
-import re
-from novel_cli.utils.text import get_chapter_match, detect_encoding, sanitize_filename
+from novel_cli.utils.text import get_chapter_match, detect_encoding
 from novel_cli.utils.file import atomic_write
 
 # Default replacements for common typos
@@ -21,45 +18,37 @@ DEFAULT_REPLACEMENTS = {
     "的幺": "的么"
 }
 
-CONFIG_FILENAME = "novel_cli_replacements.json"
-
-def load_replacements() -> Dict[str, str]:
+def load_replacements(config_path: Path | None = None) -> dict[str, str]:
     """
-    Load replacements from configuration files.
-    Priority:
-    1. Current working directory config
-    2. Home directory config (~/.novel_cli/)
-    3. Default hardcoded values
+    Load replacements from configuration file if provided.
+    Otherwise uses default hardcoded values.
+
+    Args:
+        config_path: Optional path to a JSON configuration file.
+
+    Returns:
+        Dictionary of replacements.
     """
     replacements = DEFAULT_REPLACEMENTS.copy()
 
-    # Check home directory
-    home_config = Path.home() / ".novel_cli" / CONFIG_FILENAME
-    if home_config.exists():
-        try:
-            with open(home_config, 'r', encoding='utf-8') as f:
-                user_config = json.load(f)
-                replacements.update(user_config)
-        except Exception:
-            pass # Ignore config errors
-
-    # Check current directory (overrides home)
-    cwd_config = Path.cwd() / CONFIG_FILENAME
-    if cwd_config.exists():
-        try:
-            with open(cwd_config, 'r', encoding='utf-8') as f:
-                cwd_replacements = json.load(f)
-                replacements.update(cwd_replacements)
-        except Exception:
-            pass
+    if config_path:
+        # Resolve to absolute path if needed, though usually handled by caller
+        if config_path.exists():
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    user_config = json.load(f)
+                    if isinstance(user_config, dict):
+                        replacements.update(user_config)
+            except Exception:
+                # If explicit config fails, we might want to warn, but keeping it simple for now
+                pass
 
     return replacements
 
-def apply_corrections(lines: List[str]) -> List[str]:
+def apply_corrections(lines: list[str], replacements: dict[str, str]) -> list[str]:
     """
     Apply text replacements to a list of lines.
     """
-    replacements = load_replacements()
     if not replacements:
         return lines
 
@@ -71,23 +60,87 @@ def apply_corrections(lines: List[str]) -> List[str]:
         corrected_lines.append(line)
     return corrected_lines
 
-def deduplicate_chapters(input_path: Path, regex_pattern: str) -> Path:
+def clean_content(lines: list[str], regex_pattern: str, replacements: dict[str, str]) -> list[str]:
+    """
+    Core logic to deduplicate chapters and fix typos.
+
+    Strategies:
+    1. Apply text corrections.
+    2. Identify chapter titles using regex_pattern.
+    3. If two chapter titles are identical (after stripping whitespace), keep the one with less leading indentation.
+    """
+    # Step 1: Apply text corrections
+    lines = apply_corrections(lines, replacements)
+
+    if not lines:
+        return lines
+
+    # Step 2: Deduplication
+    # We use a set of indices to mark lines for deletion
+    to_delete = set()
+
+    # Identify all chapter titles first to avoid repeated regex matching
+    # structure: list of (line_index, match_object, stripped_content, indentation_level)
+    chapter_indices = []
+    for idx, line in enumerate(lines):
+        match = get_chapter_match(line, regex_pattern)
+        if match:
+            indent = len(line) - len(line.lstrip())
+            chapter_indices.append({
+                'index': idx,
+                'content': line.strip(),
+                'indent': indent
+            })
+
+    # Compare adjacent chapter titles
+    # We iterate through the identified chapters
+    i = 0
+    while i < len(chapter_indices) - 1:
+        current_chap = chapter_indices[i]
+        next_chap = chapter_indices[i+1]
+
+        # Check if contents are identical
+        if current_chap['content'] == next_chap['content']:
+            # Duplicate found!
+            # Prefer the one with less indentation
+            if current_chap['indent'] <= next_chap['indent']:
+                # Keep current, mark next for deletion
+                to_delete.add(next_chap['index'])
+                # Effectively, we skip the 'next_chap' in the next comparison
+                # The 'current_chap' (i) will now be compared with i+2
+                # So we delete i+1 from our logical list of chapters to compare
+                del chapter_indices[i+1]
+                # i stays the same, so we compare current against the new next
+                continue
+            else:
+                # Keep next, mark current for deletion
+                to_delete.add(current_chap['index'])
+                # We move to next pair, but since current is deleted,
+                # effectively next_chap becomes the new 'current' for the next iteration
+                i += 1
+        else:
+            i += 1
+
+    # Construct new content
+    cleaned_lines = [line for idx, line in enumerate(lines) if idx not in to_delete]
+
+    return cleaned_lines
+
+def deduplicate_chapters(input_path: Path, regex_pattern: str, config_path: Path | None = None) -> Path:
     """
     Remove duplicate chapters from the input file and fix common typos.
-    Strategies:
-    1. Apply text corrections (e.g. "这幺" -> "这么")
-    2. Identify chapter titles using regex_pattern.
-    3. If two adjacent chapter titles are identical (after stripping whitespace), keep the one with less leading indentation.
+    Wrapper around clean_content that handles file IO.
 
     Args:
         input_path: Path to the input novel file.
         regex_pattern: Regex pattern to identify chapter titles.
+        config_path: Optional path to replacements config JSON.
 
     Returns:
         Path to the cleaned file.
     """
     encoding = detect_encoding(input_path)
-    lines: List[str] = []
+    lines: list[str] = []
 
     with input_path.open('r', encoding=encoding) as f:
         lines = f.readlines()
@@ -95,44 +148,11 @@ def deduplicate_chapters(input_path: Path, regex_pattern: str) -> Path:
     if not lines:
         return input_path
 
-    # Step 1: Apply text corrections
-    lines = apply_corrections(lines)
+    # Load config
+    replacements = load_replacements(config_path)
 
-    # Step 2: Deduplication
-    to_delete = [False] * len(lines)
-
-    # Iterate through lines to find duplicates
-    # We look at pairs of i and i+1
-    i = 0
-    while i < len(lines) - 1:
-        current_line = lines[i]
-        next_line = lines[i+1]
-
-        # Check if both are chapter titles
-        curr_match = get_chapter_match(current_line, regex_pattern)
-        next_match = get_chapter_match(next_line, regex_pattern)
-
-        if curr_match and next_match:
-            # Check if contents are identical stripped
-            if current_line.strip() == next_line.strip():
-                # Duplicate found!
-                # Prefer the one with less indentation (length of leading whitespace)
-                curr_indent = len(current_line) - len(current_line.lstrip())
-                next_indent = len(next_line) - len(next_line.lstrip())
-
-                if curr_indent <= next_indent:
-                    # Keep current, delete next
-                    to_delete[i+1] = True
-                    # Look ahead logic handled by just marking and moving to next iteration
-                    pass
-                else:
-                    # Keep next, delete current
-                    to_delete[i] = True
-
-        i += 1
-
-    # Construct new content
-    cleaned_lines = [line for idx, line in enumerate(lines) if not to_delete[idx]]
+    # Process
+    cleaned_lines = clean_content(lines, regex_pattern, replacements)
 
     # Save to a new file using atomic_write for safety
     output_path = input_path.with_name(f"{input_path.stem}_clean{input_path.suffix}")

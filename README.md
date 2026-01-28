@@ -56,10 +56,26 @@ Synthesize audio using a local GPT-SoVITS server.
 ```
 
 ### Clean / Deduplicate Chapters
-Remove consecutively duplicated chapters (e.g. `Chapter 1` followed by an indented `  Chapter 1`).
+Remove consecutively duplicated chapters (e.g. `Chapter 1` followed by an indented `  Chapter 1`) and fix common typos.
 
 ```bash
+# Basic usage
 ./dist/novel-cli.pyz clean -f novel.txt
+
+# With custom replacement configuration
+./dist/novel-cli.pyz clean -f novel.txt --config my_replacements.json
+```
+
+The `clean` command performs two actions:
+1. **Deduplication**: Removes duplicate chapters, preferring the version with less indentation.
+2. **Text Correction**: Fixes common typos (e.g., "这幺" -> "这么") based on built-in defaults or a user-provided JSON config.
+
+**Replacement Config Format (JSON):**
+```json
+{
+  "wrong_text": "correct_text",
+  "foo": "bar"
+}
 ```
 This will create `novel_clean.txt`.
 

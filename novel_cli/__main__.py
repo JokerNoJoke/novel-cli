@@ -49,6 +49,7 @@ def main():
     # Subcommand: clean (dedupe)
     parser_clean = subparsers.add_parser('clean', help='Remove duplicate chapters.')
     add_common_args(parser_clean)
+    parser_clean.add_argument('--config', type=Path, default=None, help="Path to JSON config file for text replacements.")
 
 
     args = parser.parse_args()
@@ -102,7 +103,8 @@ def main():
             print(f"Cleaning duplicates in: {input_file}")
             result = clean.deduplicate_chapters(
                 input_path=input_file,
-                regex_pattern=args.regex_pattern
+                regex_pattern=args.regex_pattern,
+                config_path=args.config
             )
             print(f"Success! Saved to: {result}")
 

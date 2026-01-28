@@ -3,7 +3,7 @@ import tempfile
 import shutil
 import json
 from pathlib import Path
-from novel_cli.core.clean import deduplicate_chapters
+from novel_cli.core.clean import deduplicate_chapters, clean_content
 
 class TestCleanFeature(unittest.TestCase):
     def setUp(self):
@@ -53,29 +53,64 @@ class TestCleanFeature(unittest.TestCase):
         self.assertEqual(result.count("第2章"), 1)
 
     def test_custom_config(self):
-        # Create custom config in the same directory
+        # Create custom config in the test directory
         custom_replacements = {
-            "foo": "bar"
+            "foo": "bar",
+            "这幺": "这幺" # Override default to keep it (test valid JSON loading)
         }
         with open(self.config_path, 'w', encoding='utf-8') as f:
             json.dump(custom_replacements, f)
 
         # Create input file
-        content = ["第1章 测试\n", "This is foo text.\n"]
+        content = ["第1章 测试\n", "This is foo text. 这幺\n"]
         with open(self.input_path, 'w', encoding='utf-8') as f:
             f.writelines(content)
 
-        # Temporarily mock Path.cwd to return our test dir so it finds the config
-        original_cwd = Path.cwd
-        try:
-            # We can't easily mock Path.cwd() globally without patching,
-            # so for this test we'll rely on the implementation allowing a specific config path
-            # OR we just test the default behavior first.
-            # Let's skip complex mocking for now and trust the manual verification or
-            # just implement the code to look in the file's directory too?
-            pass
-        finally:
-            pass
+        # Run clean command with explicit config path
+        output_path = deduplicate_chapters(
+            self.input_path,
+            r"^\s*第[0-9]+章",
+            config_path=self.config_path
+        )
+
+        with open(output_path, 'r', encoding='utf-8') as f:
+            result = f.read()
+
+        # "foo" should become "bar"
+        self.assertIn("This is bar text.", result)
+        # "这幺" should stay "这幺" because we overrode it in custom config
+        self.assertIn("这幺", result)
+
+    def test_clean_content_logic_pure(self):
+        """Test the core logic without file IO"""
+        lines = [
+            "Chapter 1\n",
+            "Content A\n",
+            "Chapter 1\n", # Duplicate, should be removed (indentation tie-breaker or first one kept)
+            "Content B\n",
+            "Chapter 2\n",
+            "   Chapter 2\n", # Duplicate with indent, should be removed
+            "Content C\n"
+        ]
+
+        # Scenario: adjacent duplicates.
+        # Our logic checks if contents are identical.
+        # Here "Chapter 1\n" == "Chapter 1\n". Indents are 0 and 0.
+        # Logic: if curr_indent <= next_indent (0<=0): keep current, delete next.
+
+        # "Chapter 2\n" (indent 0) vs "   Chapter 2\n" (indent 3).
+        # 0 <= 3: keep current, delete next.
+
+        cleaned = clean_content(lines, r"^\s*Chapter \d+", replacements={})
+
+        self.assertEqual(len(cleaned), 5)
+        self.assertEqual(cleaned[0], "Chapter 1\n")
+        self.assertEqual(cleaned[1], "Content A\n")
+        # Second Chapter 1 removed
+        self.assertEqual(cleaned[2], "Content B\n")
+        self.assertEqual(cleaned[3], "Chapter 2\n")
+        # Indented Chapter 2 removed
+        self.assertEqual(cleaned[4], "Content C\n")
 
 if __name__ == '__main__':
     unittest.main()
